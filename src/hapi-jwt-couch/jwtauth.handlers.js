@@ -29,16 +29,36 @@ module.exports = function (server, conf) {
 
 	couchUpdateViews.migrateUp(couchprovider.getCouchDBServer(), path.join(__dirname, 'views'), true)
 	.catch(function(err){
-		couchUpdateViews.migrateUp(couchprovider.getCouchDBServer(), path.join(__dirname, 'views'));	
+		return couchUpdateViews.migrateUp(couchprovider.getCouchDBServer(), path.join(__dirname, 'views'));
+	})
+	.then(function(){
+		return couchprovider.getView("_design/user/_view/scopes");
+	})
+	.then(function(res){		
+		if(res && res.length === 0){
+			console.log("Generating default scopes...");
+			return couchprovider.uploadDocuments({
+				type: 'scopes',
+				scopes:['default','admin']
+			})
+			.then(function(){
+				console.log("Done!");
+			});
+		}		
+	})
+	.catch(function(err){		
+		console.error(err);
 	});
 
 	var handler = {};
 
-	const sign = function(user, maxAge){
+	const sign = function(user, algorithm){
 		var token = {};
-		var algo = conf.algorithm;
-		if(maxAge){
-			algo.expiresIn = maxAge;
+		var algo;
+		if(algorithm){
+			algo = algorithm;
+		}else{
+			algo = conf.algorithm;
 		}
 		token.token = jwt.sign(user, conf.privateKey, algo );
 		return token;
@@ -283,18 +303,25 @@ module.exports = function (server, conf) {
 
 			info = info[0];
 
-			var maxAge = "30m";
+			var algorithm = _.clone(conf.algorithm);
+			algorithm.expiresIn = "30m";
 
-			var token = server.methods.jwtauth.sign({ email: info.email }, maxAge);
+			var token = server.methods.jwtauth.sign({ email: info.email }, algorithm);
 			
 			var message = "Hello @USERNAME@,<br>Somebody asked me to send you a link to reset your password, hopefully it was you.<br>Follow this <a href='@SERVER@/public/#/login/reset?token=@TOKEN@'>link</a> to reset your password.<br>The link will expire in 30 minutes.<br>Bye.";
 
 			if(conf.mailer.message){
 				message = conf.mailer.message;
 			}
+
+			var uri = server.info.uri;
+
+			if(conf.mailer.uri){
+				uri = conf.mailer.uri;
+			}
 			
 			message = message.replace("@USERNAME@", info.name);
-			message = message.replace("@SERVER@", server.info.uri);
+			message = message.replace("@SERVER@", uri);
 			message = message.replace("@TOKEN@", token.token);
 
 			var mailOptions = {
@@ -320,6 +347,34 @@ module.exports = function (server, conf) {
 		
 
 		
+	}
+
+	handler.getScopes = function(req, rep){
+		couchprovider.getView('_design/user/_view/scopes?include_docs=true')
+		.then(function(info){
+			rep(_.pluck(info, 'doc'));
+		})
+		.catch(function(err){
+			rep(Boom.badImplementation(err));
+		})
+	}
+
+	handler.updateScopes = function(req, rep){
+
+		var user = req.auth.credentials;
+		var updateinfo = req.payload;
+
+		if(user.scope.indexOf('admin') === -1){
+			rep(Boom.unauthorized('You cannot modify the scopes'));
+		}else{
+			return couchprovider.uploadDocuments(req.payload)
+			.then(function(res){
+				rep(res[0]);
+			})
+			.catch(function(e){
+				rep(Boom.wrap(e));
+			});
+		}
 	}
 
 

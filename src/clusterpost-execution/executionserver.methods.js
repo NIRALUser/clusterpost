@@ -2,25 +2,21 @@
 module.exports = function (conf) {
 
 	var fs = require('fs');
-	var request = require('request');
 	var Promise = require('bluebird');
 	var _ = require("underscore");
 	var path = require("path");
 	var tarGzip = require('node-targz');
 	var Joi = require('joi');
 	var clustermodel = require('clusterpost-model');
+	var clusterpost = require('clusterpost-lib');
 
-	var agentOptions = {};
-
-	if(conf.tls && conf.tls.cert){
-	    agentOptions.ca = fs.readFileSync(conf.tls.cert);
+	var agentOptions = {
+		rejectUnauthorized: false
 	}
 
-	var token;
-
-	if(conf.token){
-		token = "Bearer " + conf.token;
-	}
+	clusterpost.setClusterPostServer(conf.uri);
+	clusterpost.setAgentOptions(agentOptions);
+	clusterpost.setUserToken(conf.token);
 
 	var handler = {};
 
@@ -34,65 +30,36 @@ module.exports = function (conf) {
 
 
 	handler.uploadDocumentDataProvider = function(doc){
-
-        return new Promise(function(resolve, reject){
-        	try{
-        		var options = { 
-	                uri: handler.getDataProvider(),
-	                method: 'PUT', 
-	                json : doc, 
-	                agentOptions: agentOptions,
-            		headers: { 
-            			"Authorization": token
-            		}
-	            };
-	            
-	            request(options, function(err, res, body){
-	                if(err) resolve(err);
-	                resolve(body);
-	            });
-        	}catch(e){
-        		reject(e);
-        	}
-            
-        });
+		return clusterpost.updateDocument(doc);
 	}
 
 	handler.getDocument = function(id){
 		Joi.assert(id, Joi.string().alphanum());
-		return new Promise(function(resolve, reject){
-			try{
-				var options = {
-					uri: handler.getDataProvider() + "/" + id, 
-	                agentOptions: agentOptions,
-            		headers: { 
-            			"Authorization": token
-            		}
-				}
-				request(options, function(err, res, body){
-					if(err){
-						reject(err);
-					}else{
-						var job = JSON.parse(body);
-						Joi.assert(job, clustermodel.job);
-						resolve(job);
-					}
-				});
-			}catch(e){
-				reject(e);
-			}
-			
+
+		return clusterpost.getDocument(id)
+		.then(function(job){
+			Joi.assert(job, clustermodel.job);
+			return job;
 		});
 	}
 
+	handler.deleteDocument = function(doc){
+		return clusterpost.deleteJob(doc._id);
+	}
+
+	//Read all files in directory and return an array with all files
 	const getAllFiles = function(dir, files){		
-		fs.readdirSync(dir).forEach(function(file) {	 
-        	var current = path.join(dir, file);       	
-			var stat = fs.statSync(current);
-			if (stat && stat.isDirectory()) {
-				getAllFiles(current, files);
-			}else {
-			    files.push(current);
+		fs.readdirSync(dir).forEach(function(file){
+			try{
+				var current = path.join(dir, file);
+				var stat = fs.statSync(current);
+				if (stat && stat.isDirectory()) {
+					getAllFiles(current, files);
+				}else {
+				    files.push(current);
+				}
+			}catch(e){
+				console.error(e);
 			}
         });
 	}	
@@ -121,98 +88,35 @@ module.exports = function (conf) {
 	handler.addDocumentAttachment = function(doc, name, path){
 		Joi.assert(doc._id, Joi.string().alphanum());
 		Joi.assert(name, Joi.string());
-		
-		return new Promise(function(resolve, reject){
-			try{
 
-				var options = {
-					uri: handler.getDataProvider() + "/" + doc._id + "/" + encodeURIComponent(name),
-					method: 'PUT',
-					headers: {
-						"Content-Type": "application/octet-stream",
-						"Authorization": token
-					}, 
-	                agentOptions: agentOptions
-				}
+		return clusterpost.uploadFile(doc._id, path, name);
+	}
 
-				try{
-
-					var fstat = fs.statSync(path);
-					if(fstat){
-						var stream = fs.createReadStream(path);						
-						
-						stream.pipe(request(options, function(err, res, body){
-							if(err){
-								reject(err);
-							}else{
-								resolve(JSON.parse(body));
-							}
-						}));
-					}else{
-						reject({
-							"error": "File not found: " + path
-						})
-					}
-				}catch(e){
-					reject({
-						"error" : e
-					});
-				}
-				
-			}catch(e){
-				reject(e);
-			}
-		});
-		
+	handler.fileExists = function(cwd, input){
+		try{
+			fs.statSync(path.join(cwd, input.name));
+			return true;
+		}catch(e){
+			return false;
+		}
 	}
 	
 
 	handler.savePromise = function(doc, cwd, input){
-
-		return new Promise(function(resolve, reject){
-
-			if(doc._attachments && !doc._attachments[input.name]){
-				reject({					
-					"status" : false,
-					"error": "Document is missing attachment" + input.name
-				});
-			}
-
-			try{
-				var options = {
-					uri: handler.getDataProvider() + "/" + doc._id + "/" + input.name, 
-	                agentOptions: agentOptions,
-            		headers: { 
-            			"Authorization": token
-            		}
-				}
-
-				var filepath = path.join(cwd, input.name);
-
-				var writestream = fs.createWriteStream(filepath);
-
-				request(options).pipe(writestream);
-
-				writestream.on('finish', function(err){					
-					if(err){
-						reject({
-							"path" : filepath,
-							"status" : false,
-							"error": err
-						});
-					}else{
-						resolve({
-							"path" : filepath,
-							"status" : true
-						});
-					}
-				});
-
-			}catch(e){
-				reject(e);
-			}
+		var inp = _.find(doc.inputs, function(inp){
+			return inp.name === input.name;
 		});
+
+		if(!inp || (doc._attachments && !doc._attachments[input.name] && !inp.remote && !inp.local)){
+			return Promise.reject({					
+				"status" : false,
+				"error": "Document is missing attachment" + input.name
+			});
+		}else{
+			return clusterpost.getDocumentAttachmentSave(doc._id, input.name, path.join(cwd, input.name));
+		}
 	}
+
 
 	handler.getAllDocumentInputs = function(doc, cwd){
 
@@ -223,11 +127,13 @@ module.exports = function (conf) {
 		if(!inputs){
 			return Promise.all([]);
 		}
-
+		//Initialize download status to false
 		for(var i = 0; i < inputs.length; i++){
 			downloadstatus.push(false);
 		}
 
+		//Check for the jobstatus and downloadstatus part of the job
+		//They are organized the same way as the array initialize in the previous step
 		if(doc.jobstatus && doc.jobstatus.downloadstatus){
 			var ds = doc.jobstatus.downloadstatus;
 			for(var i = 0; i < ds.length; i++){
@@ -236,16 +142,18 @@ module.exports = function (conf) {
 				}
 			}
 		}
+
+		//If the download status is ok then don't download again. 
 		for(var i = 0; i < inputs.length; i++){
 			var input = inputs[i];
-			if(downloadstatus[i]){
+			if(downloadstatus[i] && handler.fileExists(cwd, input)){
 				alldownloads.push(downloadstatus[i]);
 			}else{				
 				alldownloads.push(handler.savePromise(doc, cwd, input)
-					.catch(function(e){
-						console.error(e);
-						return e;
-					}));
+				.catch(function(e){
+					console.error(e);
+					return e;
+				}));
 			}
 		}		
 		return Promise.all(alldownloads);
@@ -324,7 +232,13 @@ module.exports = function (conf) {
 		if(output.type === 'file'){
 			return getlatestdoc
 			.then(function(latestdoc){
-				return handler.addDocumentAttachment(latestdoc, output.name, path.join(cwd, output.name));
+				var filepath;
+				if(output.path){
+					filepath = path.join(cwd, output.path)
+				}else{
+					filepath = path.join(cwd, output.name)
+				}
+				return handler.addDocumentAttachment(latestdoc, output.name, filepath);
 			});
 			
 		}else if(output.type === 'tar.gz'){
@@ -407,7 +321,39 @@ module.exports = function (conf) {
 				}
 			});
 			fs.rmdirSync(dir);
+			return true;
 	    }
+	    return false;
+	}
+
+	//One of
+	//'CREATE', 'QUEUE', 'DOWNLOADING', 'RUN', 'FAIL', 'KILL', 'UPLOADING', 'EXIT', 'DONE'
+	handler.getJobsStatus = function(status){
+		if(conf.executionserver){
+			return clusterpost.getExecutionServerJobs(conf.executionserver, status);
+		}else{
+			return Promise.reject("No executionserver in configuration.", JSON.stringify(conf), "Set the codename for the executionserver as 'executionserver: servername'");
+		}
+	}
+
+	handler.getJobsQueue = function(){
+		return handler.getJobsStatus("QUEUE")
+	}
+
+	handler.getJobsRun = function(){
+		return handler.getJobsStatus("RUN");
+	}
+
+	handler.getJobsUploading = function(){
+		return handler.getJobsStatus("UPLOADING");
+	}
+
+	handler.getJobsKill = function(){
+		return handler.getJobsStatus("KILL");
+	}
+
+	handler.getJobsDelete = function(){
+		return clusterpost.getDeleteQueue();
 	}
 
 	return handler;

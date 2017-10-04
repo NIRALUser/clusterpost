@@ -23,19 +23,43 @@ const startServer = function(cluster){
     var conf = getConfigFile();
     
     var server = new Hapi.Server();
+    var http_server;
 
-    if(conf.tls && conf.tls.key && conf.tls.cert){
-        const tls = {
-          key: fs.readFileSync(conf.tls.key),
-          cert: fs.readFileSync(conf.tls.cert)
-        };
+    if(conf.connections){
+        Object.keys(conf.connections).forEach(function(connection_label){
+            var connection = conf.connections[connection_label];
+            if(connection.tls){
+                const tls = {
+                    key: fs.readFileSync(connection.tls.key),
+                    cert: fs.readFileSync(connection.tls.cert)
+                }
+            }
+            
+            server.connection({ 
+                host: connection.host,
+                port: connection.port,
+                labels: [connection_label],
+                tls: tls
+            });
+        });
+
+        http_server = server.select("http");
+
+    }else{
+        var tls;
+        if(conf.tls && conf.tls.key && conf.tls.cert){
+            tls = {
+              key: fs.readFileSync(conf.tls.key),
+              cert: fs.readFileSync(conf.tls.cert)
+            };
+        }
+        server.connection({ 
+            host: conf.host,
+            port: conf.port,
+            tls: tls
+        });
+        http_server = server;
     }
-
-    server.connection({ 
-        host: conf.host,
-        port: conf.port,
-        tls: tls
-    });
 
     var plugins = [];
 
@@ -61,17 +85,17 @@ const startServer = function(cluster){
         }
     });
 
-    if(cluster){
-        server.method({
-            name: 'cluster.getWorker',
-            method: function(){
-                return cluster.worker;
-            },
-            options: {}
-        });
-    }
+    
+    http_server.method({
+        name: 'getCluster',
+        method: function(){
+            return cluster;
+        },
+        options: {}
+    });
+    
 
-    server.register(plugins, function(err){
+    http_server.register(plugins, function(err){
         if (err) {
             throw err; // something bad happened loading the plugin
         }
@@ -79,8 +103,12 @@ const startServer = function(cluster){
     });
     
     server.start(function () {
-        server.log('info', 'Server running at: ' + server.info.uri);
+        server.connections.forEach(function(connection){
+            server.log('info', 'server is listening port: ' + connection.info.uri + " label: " + connection.settings.labels);
+        });
     });
+
+
 }
 
 if(env === 'production'){
@@ -89,7 +117,7 @@ if(env === 'production'){
 
     if (cluster.isMaster) {
       // Fork workers.
-      for (var i = 0; i < numCPUs; i++) {
+      for (var i = 0; i < 1; i++) {
         cluster.fork();
       }
 
@@ -104,4 +132,3 @@ if(env === 'production'){
 
     startServer();
 }
-

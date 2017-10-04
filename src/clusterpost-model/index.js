@@ -7,13 +7,17 @@ exports.parameter = Joi.object().keys({
 
 exports.output = Joi.object().keys({
 	type: Joi.string().valid('file', 'directory', 'tar.gz'), 
-  	name: Joi.string()
+  	name: Joi.string(),
+  	path: Joi.string().optional()
 });
 
 exports.input = Joi.object().keys({
   	name: Joi.string(),
   	remote : Joi.object().keys({
   		serverCodename: Joi.string().optional(),
+  		uri: Joi.string()
+  	}).optional(),
+  	local : Joi.object().keys({
   		uri: Joi.string()
   	}).optional()
 });
@@ -26,11 +30,15 @@ exports.jobpost = Joi.object().keys({
 		executable: Joi.string().required(),			
 		parameters: Joi.array().items(exports.parameter).min(1),
 		inputs: Joi.array().items(exports.input).min(1).optional(),
-		outputs: Joi.array().items(exports.output).min(1)
+		outputs: Joi.array().items(exports.output).min(1),
+		outputdir: Joi.string().optional(),
+		name: Joi.string().optional(),
+		scope: Joi.array().items(Joi.string()).optional(),
+		version: Joi.string().optional()
     });
 
 exports.jobstatus = Joi.object().keys({
-		status: Joi.string().valid('CREATE', 'DOWNLOADING', 'RUN', 'FAIL', 'KILL', 'UPLOADING', 'EXIT', 'DONE'),
+		status: Joi.string().valid('CREATE', 'QUEUE', 'DOWNLOADING', 'RUN', 'FAIL', 'KILL', 'UPLOADING', 'EXIT', 'DONE'),
 		jobid: Joi.number().optional(),
 		stat: Joi.optional(),
 		error: Joi.optional(),
@@ -51,5 +59,9 @@ exports.job = Joi.object().keys({
 		parameters: Joi.array().items(exports.parameter).min(1),			
 		inputs: Joi.array().items(exports.input).min(1).optional(),
 		outputs: Joi.array().items(exports.output).min(1),
-		_attachments: Joi.optional()
+		outputdir: Joi.string().optional(),
+		name: Joi.string().optional(),
+		_attachments: Joi.optional(),
+		scope: Joi.array().items(Joi.string()).optional(),
+		version: Joi.string().optional()
     });

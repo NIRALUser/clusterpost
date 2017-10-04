@@ -92,6 +92,9 @@ module.exports = function (server, conf) {
 	        	maxBytes: 1024 * 1024 * 1024,
 	    		output: 'stream'
 	        },
+	        response: {
+	        	schema: Joi.object()
+	        },
 		    description: 'Add attachment data'
 	    }
 	});
@@ -149,14 +152,15 @@ module.exports = function (server, conf) {
 		config: {
 			auth: {
                 strategy: 'token',
-                scope: ['clusterpost']
+                scope: ['clusterpost', 'executionserver']
             },
 			handler: handlers.getUserJobs,
 			validate: {
 			  	query: Joi.object().keys({
 			  		userEmail: Joi.string().email().optional(),
 			  		jobstatus: Joi.string().optional(),
-			  		executable: Joi.string().optional()
+			  		executable: Joi.string().optional(),
+			  		executionserver: Joi.string().optional()
 			  	}), 
 			  	params: false
 			},
@@ -185,7 +189,7 @@ module.exports = function (server, conf) {
 			    payload: false
 			},
 			description: 'Get a specific attachment of the document posted to the database.',
-      		cache : { expiresIn: 60 * 30 * 1000 }
+			cache : { expiresIn: 60 * 30 * 1000 }
 	    }
 	});
 
@@ -206,11 +210,57 @@ module.exports = function (server, conf) {
 			    },
 			    payload: false
 			},
-			description: 'Get a specific attachment of the document posted to the database, the query parameter token is validated',
+			description: 'Get a temporary token to download an attachment from a job. This is useful when you want to download a file in a separate window. The query parameter expiresIn is expressed in seconds or a string describing a time span. Eg: 60, "2 days", "10h", "7d"',
 			response: {
 				schema: Joi.object().keys({
 					token: Joi.string().required()
 				})
+			}
+	    }
+	});
+
+	server.route({
+		method: 'GET',
+		path: "/dataprovider/download/job/{id}",
+		config: {
+			auth: {
+                strategy: 'token',
+                scope: ['clusterpost', 'executionserver']
+            },
+			handler: handlers.getDownload,
+			validate: {
+			  	query: false,
+			    params: {
+			    	id: Joi.string().alphanum().required()
+			    },
+			    payload: false
+			},
+			description: 'Download job in a tar file',
+			response: {
+				schema: true
+			}
+	    }
+	});
+
+	server.route({
+		method: 'DELETE',
+		path: "/dataprovider/download/job/{id}",
+		config: {
+			auth: {
+                strategy: 'token',
+                scope: ['clusterpost', 'executionserver']
+            },
+			handler: handlers.deleteDownload,
+			validate: {
+			  	query: false,
+			    params: {
+			    	id: Joi.string().alphanum().required()
+			    },
+			    payload: false
+			},
+			description: 'Delete the tar file in temp folder',
+			response: {
+				schema: true
 			}
 	    }
 	});
@@ -227,7 +277,8 @@ module.exports = function (server, conf) {
 			    },
 			    payload: false
 			},
-			description: 'Get an attachment using a temporary token'
+			description: 'Get an attachment using a temporary token',
+			cache : { expiresIn: 60 * 30 * 1000 }
 	    }
 	});
 
